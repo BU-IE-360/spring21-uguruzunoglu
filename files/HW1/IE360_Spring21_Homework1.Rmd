@@ -1,0 +1,134 @@
+---
+title: "Exploring the Time Series Data Available in CBRT and Google Trends"
+author: "Ugur Uzunoglu - IE360 - Spring 2021"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Part a
+
+From Central Bank of the Republic of Turkey's EVDS Dataset, (USD) US Dollar (Buying)-Level, Weighted Average Interest Rates For Banks Loans and Consumer Price Index (2003=100) datasets will be analyzed in this homework. The initial hypothesis is that is there any relationship between US Dollar exchange rate, CPI(inflation) and interest rates. 
+
+### Data Reading & Preprocessing
+Importing necessary libraries
+```{r,warning=FALSE, message=FALSE}
+library("readxl")
+library("ggplot2")
+library("tidyverse")
+library("zoo")
+library(plotly)
+```
+Dataset is gathered as an excel file from the EVDS: 
+```{r,echo=TRUE,eval=TRUE}
+df <- read_excel("EVDS.xlsx")
+str(df)
+drop_na(df)
+```
+There are no missing values.
+
+### Data Visualization
+In order to have better visualization, dates are converted into Date class of R to better visualization.
+```{r,echo=TRUE,eval=TRUE}
+df$Date <- as.yearmon(df$Date)
+
+#USDTRY
+p <- ggplot(data = df, aes(x = Date, y = TP_DK_USD_A_YTL,group=1))+
+  geom_line(color = '#007cc3') + labs(title = '(USD) US Dollar (Buying)-Level', x= "Date", y = "(USD) US Dollar (Buying)-Level") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+```{r,echo=TRUE,eval=TRUE}
+
+#CPI
+p <- ggplot(data = df, aes(x = Date, y = TP_FE_OKTG01,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Consumer Price Index', x= "Date", y = "Consumer Price Index(2003=100)") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+
+```{r,echo=TRUE,eval=TRUE}
+
+#Interest rate
+p <- ggplot(data = df, aes(x = Date, y = TP_KTF10,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Weighted Average Interest Rates For Banks Loans (Personal Use), TRY', x= "Date", y = "Interest Rate") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+
+As can be observed, USD-TRY exchange rate and CPI have very similar trends and also have similar peaks and bottoms, as can be seen in 2018. However, a delay of 2-3 months can exist between these variables. There is no strong seasonality in these variables. Both variables have a positive trend between 2010-2016; after that, fluctuations occurred more. 
+
+The interest rate has also a similar trend comparing to CPI and the exchange rate; however, the data has more seasonality and strong fluctuation from the trend, especially after 2018. The strong fluctuations can be explained by the interest rate is more controllable by CBRT, CBRT try to decrease inflation and exchange rates with the interest rate.
+
+The underlying reason of the increasing trends of the aforementioned variables can be globally increased dollar supply, wrong economical policies, distrust in the country, etc. . 
+
+## Part b
+Data is downloaded as csv file. It is converted into xlsx file.
+
+```{r,echo=TRUE,eval=TRUE}
+
+df <- read_excel("dolar.xlsx")
+df$Date <- as.yearmon(df$Date)
+
+#Interest rate
+p <- ggplot(data = df, aes(x = Date, y =dolar, group=1))+
+  geom_line(color = '#007cc3') + labs(title = "Google Search Trend: Dolar", x= "Date", y = "Interest Over Time") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+The same trend is observed for USDTRY exchange rate and the search term 'dolar'. After 2016, drastic increase in interest can be observed. Furthermore, when the exchange rate realizes a peak, users tend to search this term significantly more. 
+
+```{r,echo=TRUE,eval=TRUE}
+
+df <- read_excel("enflasyon.xlsx")
+df$Date <- as.yearmon(df$Date)
+
+#Interest rate
+p <- ggplot(data = df, aes(x = Date, y =Enflasyon, group=1))+
+  geom_line(color = '#007cc3') + labs(title = "Google Search Trend: Enflasyon", x= "Date", y = "Interest Over Time") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+After 2018, CPI increases even faster than before, one can observe the same trend here. However, CPI is an aggregated variable, people tend to search 'enflasyon', when a significant percentage change between months or year-over-year change is observed. Therefore, same trend is not actually observed between CPI and search term 'enflasyon'.
+```{r,echo=TRUE,eval=TRUE}
+#Interest rate
+df <- read_excel("faiz.xlsx")
+df$Date <- as.yearmon(df$Date)
+p <- ggplot(data = df, aes(x = Date, y =Faiz, group=1))+
+  geom_line(color = '#007cc3') + labs(title = "Google Search Trend: Faiz", x= "Date", y = "Interest Over Time") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+There is a strong relationship between relatively high interest rates and the tendency to search 'faiz' in Google. This phenomenon is again more observable after 2016.
+
+## Conclusion
+With this study, one can argue that CPI, USDTRY Exchange Rate and Interest Rates are related to each other. Similar trends Y-o-Y are observed, they have similar peaks and downs altogether or their impact on each other can be observed in a short time period(months). Moreover, people tend to search economic terms more than usual, when a serious spike occurs in those terms.
+
