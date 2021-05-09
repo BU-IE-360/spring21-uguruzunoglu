@@ -1,0 +1,241 @@
+---
+title: "Time Series Regression for Predicting Macroeconomic Indicators"
+author: "Ugur Uzunoglu - IE360 - Spring 2021"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+From Central Bank of the Republic of Turkey's EVDS Dataset, the target variable "Consumer Price Index (2003=100)(TURKSTAT) -> “PURCHASE OF VEHICLES” " is selected. The aim of this study to find other relevant data to predict the April 2021 value of our target variable with time series regression. To have more accurate prediction, I initially hypothesize that there would be strong relationship between the target variable and ''Weighted Average Interest Rates For Banks Loans For Vehicles'', ''USDTRY Exchange Rate(Buying)'', "The probability of buying a car (over the next 12 months)-Level" and "Seasonally unadjusted Consumer Confidence Index". 
+
+## Data Reading & Preprocessing
+Importing necessary libraries
+```{r,warning=FALSE, message=FALSE}
+library("readxl")
+library("ggplot2")
+library("tidyverse")
+library("zoo")
+library(plotly)
+library("data.table")
+library(forecast)
+library(ggcorrplot)
+```
+Target variable is gathered as an excel file from the EVDS: 
+```{r,echo=TRUE,eval=TRUE}
+df <- read_excel("EVDS.xlsx")
+
+str(df)
+drop_na(df)
+#converting to data table
+setDT(df)
+```
+There are no missing values.
+
+## Training & Comparison and Visualization of Models
+In order to have better visualization, dates are converted into Date class of R.
+```{r,echo=TRUE,eval=TRUE}
+df$Date <- as.yearmon(df$Tarih)
+
+#USDTRY
+p <- ggplot(data = df, aes(x = Date, y = `TP FG J071`,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'CPI - Purchase of Vehicles', x= "Date", y = "CPI - Purchase of Vehicles") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+Between 2012-2021, CPI for vehicles has a positive trend with more variance is observable after 2018. There isn't any obvious seasonality exist, with only visual inspection. The data looks like exponential and more variance in the recent years are observed, therefore log transformation would be a good idea. 
+
+### Univariate linear regression
+Fitting the simplest model with univariate linear regression with/without log transformation:
+```{r,echo=TRUE,eval=TRUE}
+#trend:
+df[,trend:=1:.N]
+df$target_log <- as.numeric(log(df$`TP FG J071`))
+
+fit <- lm(`TP FG J071`~trend, data = df)
+summary(fit)
+checkresiduals(fit)
+
+```
+```{r,echo=TRUE,eval=TRUE}
+#trend:
+
+#log transformation
+fit2 <- lm(target_log~trend, data = df)
+summary(fit2)
+checkresiduals(fit2)
+
+```
+
+Comparing these two models, model with log transformed target variable yields better results, in terms of R-squared values and residual distribution. Log transformation causes lower variance in the model, thus better R-squared and adjusted R-squared. Both models reject null hypothesis with low p-values. Yet in both models, residuals don't have zero mean, and have serial correlation, therefore there are still improvement areas to be realized. Continuing with log transformation, the trend line can be visualized: 
+
+```{r,echo=FALSE,eval=TRUE}
+df$trend_model <- predict(fit2, df)
+p <- ggplot(data = df, aes(x = Date))+
+  geom_line(aes(y=target_log,color='Target variable') ) +
+  geom_line(aes(y=trend_model,color='Trend')) +
+                     scale_color_manual(values = c(
+    'Target variable' = '#007cc3',
+    'Trend' = 'red')) +   labs(title = 'CPI - Purchase of Vehicles', x= "Date", y = "CPI - Purchase of Vehicles",color = 'Legend')
+
+ theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+In order to control seasonality and thus to obtain better regression, a 'month' variable can be introduced to the model. 
+```{r,echo=TRUE,eval=TRUE}
+#adding month variable:
+month=seq(1,12,by=1)
+df = cbind(df,month)
+
+```
+
+```{r,echo=TRUE,eval=TRUE}
+#linear regression
+fit3 <- lm(target_log~trend+month, data = df)
+summary(fit3)
+checkresiduals(fit3)
+#
+
+```
+
+```{r,echo=FALSE,eval=TRUE}
+df$trend_model <- predict(fit3, df)
+p <- ggplot(data = df, aes(x = Date))+
+  geom_line(aes(y=target_log,color='Target variable') ) +
+  geom_line(aes(y=trend_model,color='Predicted')) +
+                     scale_color_manual(values = c(
+    'Target variable' = '#007cc3',
+    'Predicted' = 'red')) +   labs(title = 'CPI - Purchase of Vehicles', x= "Date", y = "CPI - Purchase of Vehicles",color = 'Legend')
+
+ theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+
+
+Since the p-value is greater than 0.05, null-hypothesis is accepted for 'month' variable. I can say that, with only considering vehicle sales data, 'month' variable does not make the model better. Let's focus on getting rid of autocorrelation by introducing lagged variables to the model. Starting with adding 2 lagged variables, for one month and two months for the residuals:
+
+```{r,echo=TRUE,eval=TRUE}
+
+df$target_lagged_1 <-shift(residuals(fit2), -1)
+df$target_lagged_2 <-shift(residuals(fit2), -2)
+#linear regression
+fit4 <- lm(target_log~trend+target_lagged_1+target_lagged_2, data = df)
+summary(fit4)
+checkresiduals(fit4)
+#                                        
+```
+Adding two lagged residuals gives a significantly better model, with residuals are more normally distributed and its mean is close to 0 and serial correlation is in the boundaries. To visualize prediction:
+
+```{r,echo=FALSE,eval=TRUE}
+df$trend_model <- predict(fit4, df)
+p <- ggplot(data = df, aes(x = Date))+
+  geom_line(aes(y=target_log,color='Target variable') ) +
+  geom_line(aes(y=trend_model,color='Predicted')) +
+                     scale_color_manual(values = c(
+    'Target variable' = '#007cc3',
+    'Predicted' = 'red')) +   labs(title = 'CPI - Purchase of Vehicles', x= "Date", y = "CPI - Purchase of Vehicles",color = 'Legend')
+
+ theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+It can be seen that the predictor is nearly having the same curve observed in the real data. The overfitting can be a problem here. 
+
+### Multivariate Linear Regression
+In order to analyze overfitting and the relationship with the target variable and other variables mentioned above, new models and EDA should be made.
+```{r,echo=TRUE,eval=TRUE}
+
+corr <-cor(df[,2:6])
+ggcorrplot(corr,lab = TRUE)
+
+```
+With our target variable ('TP FG J071'), USDTRY exchange rate('TP DK USD A YTL') and Consumer Confidence Index(TP TG2 Y01) are strongly correlated. To put all these parameters in our model, also including trend parameter founded earlier we will find the optimum variables. At first, no lagged variables are introduced.
+
+```{r,echo=TRUE,eval=TRUE}
+
+#df$target_lagged_1 <-shift(residuals(fit2), -1)
+#df$target_lagged_2 <-shift(residuals(fit2), -2)
+#linear regression
+dolar = df$`TP DK USD A YTL`
+survey = df$`TP TG2 Y01`
+interest = df$`TP KTF11`
+probability = df$`TP TG2 Y17`
+fit5 <- lm(target_log~trend+dolar+survey+interest+probability, data = df)
+summary(fit5)
+checkresiduals(fit5)
+#                                        
+```
+This model is also very succesfull in terms of residual mean and R-squared values (achieving 0.99 R-squared and adjusted R-squared); however,the probability of buying a car (over the next 12 months) fails to reject null hypothesis, autocorrelation is still a issue and residuals are not properly gaussian distributed. I discard 'probability' variable and adding one lagged variables(two lagged variables failed to reject null hypothesis): 
+
+```{r,echo=TRUE,eval=TRUE}
+
+df$target_lagged_1 <-shift(residuals(fit5), -1)
+
+fit6 <- lm(target_log~trend+dolar+survey+interest+target_lagged_1, data = df)
+summary(fit6)
+checkresiduals(fit6)
+
+```
+
+
+```{r,echo=FALSE,eval=TRUE}
+df$trend_model <- predict(fit6, df)
+p <- ggplot(data = df, aes(x = Date))+
+  geom_line(aes(y=target_log,color='Target variable') ) +
+  geom_line(aes(y=trend_model,color='Predicted')) +
+                     scale_color_manual(values = c(
+    'Target variable' = '#007cc3',
+    'Predicted' = 'red')) +   labs(title = 'CPI - Purchase of Vehicles', x= "Date", y = "CPI - Purchase of Vehicles",color = 'Legend')
+
+ theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+
+This model gives the best results achieved in this study. Comparing with one variable linear regression, this model yield the similar results in terms of R-squared and ACF, but residuals are more evenly distributed and deviates less than the mean. Also, visually it predicts the target variable very precisely and more resilient to overfitting with considering more than one variables and having less lagged values. Also, adjusted R-squared is not decreased with introducing more variables, it means that new introduced variables are important for predicting the target variable.
+
+
+
+```{r,echo=FALSE,eval=FALSE}
+#I got syntax error and therefore could not predicted for April 2021
+df_pred <- read_excel("prediction.xlsx")
+df_pred$Date <- as.yearmon(df_pred$Tarih)
+df_pred$trend=112
+df_pred$trend_model=112
+df$target_log <- as.numeric(log(df$`TP FG J071`))
+#same as previous lagged variable
+df_pred$target_lagged_1<- 0.0079046173 
+predict(fit6, df_pred, header=T)
+
+```
+
+## Conclusion
+
+With this study, one can argue that CPI for Vehicles, USDTRY Exchange Rate and Interest Rates and  Consumer Confidence Index are related to each other and they can be used for predicting CPI for Vehicles. Without using them, the regression can suffer from overfitting and lacks of normality and zero mean assumptions. Furthermore, CPI for Vehicles has not significant seasonality and has upwards trend. To obtain a more accurate model, external data can also be considered such as ÖTV raise for cars, amount of loan given by banks for buying vehicles, etc.
