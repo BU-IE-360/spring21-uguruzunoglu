@@ -7,4 +7,4 @@
 [Here](files/HW1/IE360_Spring21_Homework1) is my homework 'Exploring the Time Series Data Available in CBRT and Google Trends'
 
 ## Week 8 (10 May 2021)
-Here](files/HW2/IE360_Spring21_Homework2) my homework 'Time Series Regression for Predicting Macroeconomic Indicators'
+[Here](files/HW2/IE360_Spring21_Homework2) my homework 'Time Series Regression for Predicting Macroeconomic Indicators'
