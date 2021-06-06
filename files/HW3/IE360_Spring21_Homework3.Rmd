@@ -1,0 +1,332 @@
+---
+title: "Predicting the hourly electricity consumption of Turkey"
+author: "Ugur Uzunoglu - IE360 - Spring 2021"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The aim of this study is to predict tomorrow's hourly consumption data with using predictive AR and MA models and considering seasonality and trend components. The data is acquired from EPİAŞ, from 1st of January, 2016 till the 20th of May, 2021. The last 14 days will be used for testing the models. 
+
+## Data Reading & Preprocessing
+Importing necessary libraries
+```{r,warning=FALSE, message=FALSE}
+library("readxl")
+library("ggplot2")
+library("tidyverse")
+library("zoo")
+library(plotly)
+library("data.table")
+library(forecast)
+library(ggcorrplot)
+library(stats)
+library(urca)
+library(lubridate)
+
+```
+Target variable is gathered as an csv file from the EPİAŞ: 
+```{r,echo=TRUE,eval=TRUE}
+df <- fread("RealTimeConsumption-01012016-20052021.csv")
+
+str(df)
+drop_na(df)
+#converting to data table
+setDT(df)
+
+#combining Date and Hour column
+df$NewDate <-dmy(df$Date)+hm(df$Hour)
+#character to numeric values for consumption series
+df$`Consumption (MWh)` <-gsub(',','',df$`Consumption (MWh)`)
+df$`Consumption (MWh)`<-as.numeric(df$`Consumption (MWh)`)
+df$year<-format(df$NewDate, "%y")
+df$day<-format(df$NewDate, "%m/%d")
+df$month<-format(df$NewDate, "%m")
+
+```
+There are no missing values.
+
+##1.  Possible types of seasonality exhibited by hourly electricity consumption
+The visualization of the time series data:
+```{r,echo=TRUE,eval=TRUE}
+
+p <- ggplot(data = df, aes(x = NewDate, y = `Consumption (MWh)`,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Hourly Electricity Consumption in Turkey between 2016-2021', x= "Date", y = "Hourly Electricity Consumption(MWh)") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+For the preliminary analysis, it can be seen that the data has a monthly seasonality. For instance, the electricity consumption is highest in the summer season, i.e between June and September. On the other hand, yearly trend is stable and linear between 2016-2020. If zooming into monthly level in 2016: 
+
+```{r,echo=TRUE,eval=TRUE}
+
+p <- ggplot(data = df[1:8500,], aes(x = NewDate, y = `Consumption (MWh)`,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Hourly Electricity Consumption in 2016', x= "Date", y = "Hourly Electricity Consumption(MWh)") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+Now the monthly trend is more observable. The consumption is higher in summer months, with significant amount of energy consumption reduction is observable in  27 March,  07 June and 13 September. I couldn't find any information about 27 March; however, in 07 June and 13 September, there were national holidays in Turkey. From that informartion, national holidays have a huge impact on energy consumtion, probably because of the reduction of the industrial electricity consumption. Zooming further into weekly, hourly and daily level:
+
+```{r,echo=TRUE,eval=TRUE}
+
+p <- ggplot(data = df[1:745,], aes(x = NewDate, y = `Consumption (MWh)`,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Hourly Electricity Consumption in January 2016', x= "Date", y = "Hourly Electricity Consumption(MWh)") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+```{r,echo=TRUE,eval=TRUE}
+
+p <- ggplot(data = df[1:200,], aes(x = NewDate, y = `Consumption (MWh)`,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Hourly Electricity Consumption in 1-8 January 2016', x= "Date", y = "Hourly Electricity Consumption(MWh)") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+From these two figures, there is also a weekly seasonality, i.e the data pattern is obervable in every 7 days. Furthermore, the consumption has its peak between 10:00 AM - 18:00 PM in every day. Therefore hourly seasonality exists too.  
+
+To sum up, hourly, daily, weekly and monthly seasonality exist in the consumption data and should be taken into account in the predictive models. Also, the data has stable yearly linear trend. To further investigate and eliminate seasonality and trend components, the decompsition of the time series data in different levels(hourly, daily, weekly, monthly) is required, because ARIMA models work best if we know the seasonality components and make the data stationary. Since the variance is not increasing over the time, additive decomposition will be used. To check whether the data stationary or not, KPSS Unit Root Test is used:
+
+```{r,echo=TRUE,eval=TRUE}
+KPSS_test= ur.kpss(df$`Consumption (MWh)`)
+summary(KPSS_test)
+plot(KPSS_test)
+```
+The null hypothesis is the data is stationary, and the value of test-statistic is far bigger than cricical values. Therefore, the null hypothesis is rejected and the data is non-stationary. Furthermore, from the ACF
+
+### Hourly Decomposition
+
+```{r,echo=TRUE,eval=TRUE}
+df_new <- ts(df$`Consumption (MWh)`,frequency=24)
+
+df_additive <- decompose(df_new,type="additive")
+plot(df_additive)
+```
+From the figure, seasonality is not clearly observable, but from the weekly figure at the beginning of the study, we know that the consumption has its peak between 10:00 AM - 18:00 PM in every day, meaning that there is a increasing trend in mornings and decreasing trend in nights. Therefore hourly seasonality exists.
+
+### Daily Decomposition
+To analyze daily trends and seasonality, the hourly data is grouped into daily data by averaging 24 hours' period. 
+```{r,echo=TRUE,eval=TRUE}
+
+daily_df <- df %>% group_by(year,day) %>% summarize(DailyAvg = mean(`Consumption (MWh)`))
+df_new <- ts(daily_df$DailyAvg,frequency=7)
+
+df_additive <- decompose(df_new,type="additive")
+plot(df_additive)
+```
+The trend and seasonality is clearly observable from the above figure. Random component is similar to white noise, but large deviations can be observed in the national holidays. 
+
+### Monhly Decomposition
+To analyze daily trends and seasonality, the daily data is grouped into monthly data by averaging daily period. 
+
+```{r,echo=TRUE,eval=TRUE}
+
+monthly_df <- df %>% group_by(year,month,day) %>% summarize(DailyAvg = mean(`Consumption (MWh)`))
+monthly_df <- monthly_df %>% group_by(year,month) %>% summarize(Monthly = mean(DailyAvg))
+
+df_new <- ts(monthly_df$Monthly,frequency=12)
+
+df_additive <- decompose(df_new,type="additive")
+plot(df_additive)
+```
+For the monthly data, the seasonality and the trend line are very clearly observable.
+
+## 2. Decomposing the Time-Series Based on the 168 Hours' Period
+Supposing that there is a pattern at every 168 hours(7 days), the decomposition of the time-series data:
+
+```{r,echo=TRUE,eval=TRUE}
+df_new <- ts(df$`Consumption (MWh)`,frequency=168)
+
+df_additive <- decompose(df_new,type="additive")
+plot(df_additive)
+```
+For 7 days' period, the energy consumption is lowest on Sundays and second lowest on Saturdays(can be seen on the daily interactive figures above. Not only the trend, but also the seasonality exists in the data, and should be eliminated for the predictive models. 
+
+## 3. Deseasonalizing and Detrendng the Time-series and Applying AR Models
+For deseasonalizing and detrendng the Time-series, the trend and seasonal components should be extracted from the consumption data:
+```{r,echo=TRUE,eval=TRUE}
+df_deseasoned_detrended <- df_new-df_additive$seasonal-df_additive$trend
+
+p <- ggplot(data = df_deseasoned_detrended, aes(x = df$NewDate, y = df_deseasoned_detrended,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Deaseasoned and Detrended Data', x= "Date", y = "Hourly Electricity Consumption(MWh)") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+```
+
+The data is now more stationary and has no increasing or decreasing trend. The deviation from the mean is resulting mostly from national holidays. To determine appropriate AR,MA, and ARMA models, KPSS Unit Root Test can be applied for checking the stationarity of the data for the differencing (d) parameter. Also, ACF and PACF plots should be investigated for p and q parameters:
+
+```{r,echo=TRUE,eval=TRUE}
+KPSS_test= ur.kpss(df_deseasoned_detrended)
+summary(KPSS_test)
+```
+The null hypothesis is accepted, since value of test-statistic is lower than the cricital values, hence the data is now stationary.
+
+```{r,echo=TRUE,eval=TRUE}
+acf(df_deseasoned_detrended,na.action=na.pass)
+pacf(df_deseasoned_detrended,na.action=na.pass)
+```
+From the ACF figure, the p parameter should be close to 1, and can be further extended into 6-7, and 24(as can be initially guessed). From the PACF figure, the q parameter should either be 1 or 2. For the training of the models, the test set(last 14 days) should be excluded from the dataset. Starting with AR models, i.e models with only autoregressive term(p):
+
+Train-test set split:
+```{r,echo=TRUE,eval=TRUE}
+df_train <- df_deseasoned_detrended[1:(length(df_deseasoned_detrended)-14*24)]
+df_test <- df_deseasoned_detrended[(length(df_deseasoned_detrended)-14*24+1):length(df_deseasoned_detrended)]
+```
+
+AR Models:
+```{r,echo=TRUE,eval=TRUE}
+model <- arima(df_train, order=c(1,0,0))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(2,0,0))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(3,0,0))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(4,0,0))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(5,0,0))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(6,0,0))
+print(model)
+AIC(model)
+
+#model <- arima(df_train, order=c(24,0,0))
+#print(model)
+#AIC(model)
+```
+The lowest AIC is achieved by p=24.However, due to high computational complexity, p=6 model will be further utilized.
+
+## 4. Applying MA Models
+As mentioned before, from the PACF figure, the q parameter should either be 1 or 2 for the MA models. However, increasing q value even more would be a good idea and should be checked too.
+
+```{r,echo=TRUE,eval=TRUE}
+model <- arima(df_train, order=c(0,0,1))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(0,0,2))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(0,0,3))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(0,0,4))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(0,0,5))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(0,0,6))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(0,0,7))
+print(model)
+AIC(model)
+
+
+```
+
+The AIC is increasing very slowly after the q=5, therefore q=5 is enough for the model, with considering the complexity and speed of the model too.
+
+## 5. Comparison of AR and MA Models and Training and Prediction of ARMA Models
+
+Comparing AIC values of the best AR and MA models, AR model with p=24 and p=6 has a lower AIC value compered to MA model with q=5. To obtain an even better model, let's start with an ARMA model with p=6 and q=5. With p=24, my computer can not train the model due to high computational complexity:
+
+```{r,echo=TRUE,eval=TRUE}
+model <- arima(df_train, order=c(6,0,5))
+print(model)
+AIC(model)
+BIC(model)
+```
+
+The AIC value is  better(lower) from the both best AR and MA models. To check residuals: 
+
+```{r,echo=TRUE,eval=TRUE}
+checkresiduals(model)
+
+```
+The autocorrelation is not completely eliminated; however, the residuals are normally distributed. To compare actual values, and predicted values of the test set, the visualization should be realized. For the seasonality, I took the first 14*24 period, since it has a replying pattern for each of the 336 data points. Also for trend component, I took the last 14*24 trend values, since the last 
+
+```{r,echo=TRUE,eval=TRUE}
+model_forecast <- predict(model, n.ahead = 14*24)$pred
+last_trend_value <-tail(df_additive$trend[!is.na(df_additive$trend)],14*24)
+
+seasonality <- df_additive$seasonal[1:(14*24)]
+forecast_combined <-model_forecast+last_trend_value+seasonality
+df$forecast <- 0
+df$forecast[(length(df_deseasoned_detrended)-14*24+1):length(df_deseasoned_detrended)] <-forecast_combined
+
+
+p <- ggplot()+
+  geom_line(data = df[46500:47208],aes(x = NewDate,y=`Consumption (MWh)`,color='Actual Data') ) +
+  geom_line(data = df[(47208-24*14+1):47208],aes(x = NewDate,y=forecast,color='Prediction')) +
+                     scale_color_manual(values = c(
+    'Actual Data' = '#007cc3',
+    'Prediction' = 'red')) +   labs(title = 'Hourly Electricity Consumption(MWh) Prediction', x= "Date", y = "Hourly Electricity Consumption(MWh)",color = 'Legend')
+
+ theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+
+fig <- ggplotly(p)
+
+fig <- fig %>% layout(dragmode = "pan")
+
+fig
+
+
+```
+The prediction is accurate for representing daily changes, but fails to represent increasing or decreasing trend over the days. It is more successful for predicting first 5 days, but then the daily trend is falsely predicted by the model. To evaulate the model and to measure overall accuracy of the model daily mean absolute percentage error for each date and weighted mean absolute percentage error (WMAPE) are calculated: 
+
+```{r,echo=TRUE,eval=TRUE}
+
+metrics <- df[(47208-24*14+1):47208] %>% group_by(year,day) %>% summarize(MAPE = mean(abs((`Consumption (MWh)`-forecast)/`Consumption (MWh)`)) * 100)
+
+metrics
+```
+As can be seen above, MAPE is lower on the especially first 3 days. 
+
+```{r,echo=TRUE,eval=TRUE}
+
+wmape <- abs(sum((df[(47208-24*14+1):47208]$`Consumption (MWh)`-df[(47208-24*14+1):47208]$forecast)*metrics$MAPE*100))/sum(df[(47208-24*14+1):47208]$`Consumption (MWh)`)
+wmape
+```
+WMAPE is approximately 10%, which is understandable based on the wrong predictions espcially after 3 days.
+
+## 6. Comparison of AR and MA Models and Training and Prediction of ARMA Models
+
+In conclusion, It is understood that the hourly electricity consumption data has highly predictable nature, and with the right model, hourly, daily or monthly prediction is achievable, even with simple ARMA methods. For the future work, SARIMA models can be introduced and autocorrelation can be eliminated with AR models with high p parameter.

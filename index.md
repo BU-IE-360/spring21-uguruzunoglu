@@ -8,3 +8,6 @@
 
 ## Week 8 (10 May 2021)
 [Here](files/HW2/IE360_Spring21_Homework2) my homework 'Time Series Regression for Predicting Macroeconomic Indicators'
+
+## Week 12 (7 June 2021)
+[Here](files/HW3/IE360_Spring21_Homework3) my homework 'Predicting the hourly electricity consumption of Turkey'
