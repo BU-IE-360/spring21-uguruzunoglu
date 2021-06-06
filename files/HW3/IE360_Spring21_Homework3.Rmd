@@ -327,6 +327,6 @@ wmape
 ```
 WMAPE is approximately 10%, which is understandable based on the wrong predictions espcially after 3 days.
 
-## 6. Comparison of AR and MA Models and Training and Prediction of ARMA Models
+## 6. Conclusion
 
 In conclusion, It is understood that the hourly electricity consumption data has highly predictable nature, and with the right model, hourly, daily or monthly prediction is achievable, even with simple ARMA methods. For the future work, SARIMA models can be introduced and autocorrelation can be eliminated with AR models with high p parameter.
