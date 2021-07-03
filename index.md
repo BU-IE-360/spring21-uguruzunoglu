@@ -11,3 +11,9 @@
 
 ## Week 12 (7 June 2021)
 [Here](files/HW3/IE360_Spring21_Homework3) my homework 'Predicting the hourly electricity consumption of Turkey'
+
+## Week 15 (3 July 2021)
+[Here](files/HW4-5/IE360_Spring21_HW4-5) my homework 'Developing alternative strategies for forecasting how many products will Trendyol sell each day'
+
+[Here](files/Project/group2_project_report-5) my homework 'IE Project'
+

@@ -1,0 +1,482 @@
+---
+title: IE 360 HW 4-5 - Developing alternative strategies for forecasting how many
+  products will Trendyol sell each day
+author: "Yunus Emre Erdogan - Ugur Uzunoglu - IE360 - Spring 2021"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The aim of this study is to develop and assess different methods for predicting Trendyol's product sales amount of nine different products. 
+
+## Data Reading & Preprocessing
+Importing necessary libraries
+```{r,warning=FALSE, message=FALSE}
+library(jsonlite)
+library(httr)
+library(ellipsis)
+library(stats)
+library(zoo)
+library(plotly)
+library(ggplot2)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(hrbrthemes)
+library(lubridate)
+library(data.table)
+library(forecast)
+library(fpp)
+library(xts)
+library(tidyverse)
+library(caret)
+library(leaps)
+library(gridExtra)
+library(GGally)
+library(urca)
+library(plyr)
+library(gridExtra)
+library(forecast)
+library(ggcorrplot)
+
+```
+Target variable and training variables is gathered as an csv file from the data Trendyol provided: 
+```{r,echo=TRUE,eval=TRUE}
+data_path='ProjectRawData.csv'
+trendyol=fread(data_path)
+trendyol$event_date=as.Date(trendyol$event_date)
+
+str(trendyol)
+
+trendyol = trendyol[!is.na(trendyol$event_date)]
+trendyol = trendyol[!(ty_visits == 1)]
+
+trendyol$price[trendyol$price == -1 ] <- 0
+trendyol$price[is.na(trendyol$price)] <- 0
+
+
+trendyol[,wday:=weekdays(trendyol$event_date)]
+trendyol[,mon:=months(trendyol$event_date)]
+```
+Missing values containing no date information and are disregarded. Also, data points in 'ty_visits' column with '-1' value does not match with the majority of the data; therefore, they are eliminated too. 
+## 2. Ploting sales information of all products
+
+In this homework, we are dealing with 9 different products. Assigning different dataframes for all nine products: 
+```{r,echo=TRUE,eval=TRUE}
+
+mont = trendyol[product_content_id=="48740784"]
+bikini_1 = trendyol[product_content_id=="73318567"]
+bikini_2 = trendyol[product_content_id=="32737302"]
+tayt = trendyol[product_content_id=="31515569"]
+kulaklık = trendyol[product_content_id=="6676673"]
+supurge = trendyol[product_content_id=="7061886"]
+yuz_temizleyicisi = trendyol[product_content_id=="85004"]
+mendil = trendyol[product_content_id=="4066298"]
+dis_fircasi = trendyol[product_content_id=="32939029"]
+
+```
+
+Time series visualization of 9 different products can be seen below: 
+
+```{r,echo=TRUE,eval=TRUE}
+par(mfrow=c(3,3))
+a<-ggplot(data = mont, aes(x = event_date, y = sold_count ,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Mont', x= "Date", y = "quantity") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+
+b<-ggplot(data = bikini_1, aes(x = event_date, y = sold_count ,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Bikini_1', x= "Date", y = "quantity") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+
+c<-ggplot(data = bikini_2, aes(x = event_date, y = sold_count ,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Bikini_2', x= "Date", y = "quantity") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+
+d<-ggplot(data = tayt, aes(x = event_date, y = sold_count ,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Tayt', x= "Date", y = "quantity") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+
+e<-ggplot(data = kulaklık, aes(x = event_date, y = sold_count ,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Kulaklık', x= "Date", y = "quantity") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+
+f<-ggplot(data = supurge, aes(x = event_date, y = sold_count ,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Süpürge', x= "Date", y = "quantity") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+
+g<-ggplot(data = yuz_temizleyicisi, aes(x = event_date, y = sold_count ,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Yüz Temizleyicisi', x= "Date", y = "quantity") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+
+h<-ggplot(data = mendil, aes(x = event_date, y = sold_count ,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Mendil', x= "Date", y = "quantity") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+
+j<-ggplot(data = dis_fircasi, aes(x = event_date, y = sold_count ,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Diş Fırçası', x= "Date", y = "quantity") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+
+grid.arrange(a,b,c,d,e,f,g,h,j , 
+             ncol = 3, nrow = 3)
+
+
+```
+The initial visual inspection is that some of the products such as Bikini_2 has monthly seasonality. Furthermore, some products are not sold not at all in certain periods, such as 'mont' product is not sold at all between March and May, indicating no stock is available in Trendyol's website. To interpret the data more carefully, seasonality analysis for different time periods should be done for each product separately.  
+
+## Analyzing the seasonality of the sales for each 9 product
+Weekly decomposition will be done for products, since yearly and hourly decomposition could not be performed due to granularity of the data. Furthermore, due to selecting data for only 5 months, monthly seasonality couldn't be done too. 
+
+ACF will give information about the 'q' parameter of the ARIMA model, i.e the moving average part. Furthermore, PACF will give information about the 'p' parameter, i.e the autoregression part. The most probable 'p' and 'q' parameter will be selected by ACF and PACF analysis and 5 ARIMA models will be tried to find best ARIMA model for each product.
+
+For all products, KPSS test, ACF, PACF and seasonality analysis will be done with the function below: 
+
+```{r,echo=TRUE,eval=TRUE}
+
+Seasonality_Analysis <- function(X){
+  input_data = X
+  len = length(input_data$price)
+  KPSS_test= ur.kpss(input_data$sold_count)
+  print(summary(KPSS_test))
+  acf(input_data$sold_count)
+  pacf(input_data$sold_count)
+  #weekly decomposition 
+  df_new <- ts(input_data$sold_count,frequency=7)
+  df_additive <- decompose(df_new,type="additive")
+  plot(df_additive)
+
+}
+```
+
+### Seasonality analysis for all nine Products
+Seasonality analyis for 'Mont Product':
+```{r,echo=TRUE,eval=TRUE}
+Seasonality_Analysis(mont)
+```
+
+For the 'Mont' product, the null hypothesis of the KPSS test is that the data is stationary, and the value of test-statistic exceeds critical values. Therefore, the null hypothesis is rejected and can be concluded that the data is non-stationary. The same conclusion logic will be applied for the rest of the products. For the seasonality, the weekly decomposition shows that the data has weekly seasonal component clearly. Random, trend and the observed data points could not give precise information, since the 'sold_count' is zero for at least 3 months, presumably due to 'out of stock' status of the product. Best 'p' and 'q' parameters are 1 and 1-2-3, respectively.  
+
+Seasonality analyis for 'Bikini_1 Product':
+```{r,echo=TRUE,eval=TRUE}
+Seasonality_Analysis(bikini_1)
+```
+The data is non-stationary. Seasonality is clearly observed; however the rest can not be observed due to most probably 'out of stock'. Best 'p' and 'q' parameters are 1 and 1-2-3, respectively. ACF also shows that significantly lags are observed even in 20. day, i.e the data has the trend component. 
+
+```{r,echo=TRUE,eval=TRUE}
+Seasonality_Analysis(bikini_2)
+```
+The data is non-stationary. Ignoring the 'out of stock' period at the end, seasonality and trend variation is clearly observed. Best 'p' and 'q' parameters are 1 and 1-2-3, respectively.
+
+```{r,echo=TRUE,eval=TRUE}
+Seasonality_Analysis(tayt)
+```
+
+The data is more stationary comparing to the products above (stationary wrt. 2.5 and 1 pct confidence interval). Seasonality is clearly observed. There is a significant peak in the data, can occur from surge in the discount(resulting from special discount days of Trendyol such as 'Muhteşem Kasım'. Best 'p' and 'q' parameters are 1 and 1-2-3, respectively. Comparing the random and the actual observation, the data resembles to white noise, meaning that it can't be predicted well by the statistical models.
+
+```{r,echo=TRUE,eval=TRUE}
+Seasonality_Analysis(kulaklık)
+```
+The data is stationary. Seasonality is clearly observed. There is a significant peak in the data, can occur from surge in the discount(resulting from special discount days of Trendyol such as 'Muhteşem Kasım'. Best 'p' and 'q' parameters are 1 and 1-2-3, respectively. 
+
+```{r,echo=TRUE,eval=TRUE}
+Seasonality_Analysis(supurge)
+```
+The data is more stationary comparing to the products above (stationary wrt. 5, 2.5 and 1 pct confidence interval). Seasonality is clearly observed. There is a significant peak in the data, can occur from surge in the discount(resulting from special discount days of Trendyol such as 'Muhteşem Kasım'. Best 'p' and 'q' parameters are 1 and 1-2-3, respectively. 
+
+```{r,echo=TRUE,eval=TRUE}
+Seasonality_Analysis(yuz_temizleyicisi)
+```
+The data is more stationary comparing to the products above (stationary wrt. 5, 2.5 and 1 pct confidence interval). Seasonality is clearly observed. Best 'p' and 'q' parameters are 1 and 1-2-3, respectively. 
+
+```{r,echo=TRUE,eval=TRUE}
+Seasonality_Analysis(mendil)
+```
+The data is stationary. Seasonality is clearly observed. Best 'p' and 'q' parameters are 1 and 1-2-3, respectively. 
+
+```{r,echo=TRUE,eval=TRUE}
+Seasonality_Analysis(dis_fircasi)
+```
+The data is non-stationary. Unlike to other 8 products, it has a decreasing trend over the months. Seasonality is clearly observed. Best 'p' and 'q' parameters are 1 and 1-2-3, respectively. 
+
+## Proposing ARIMA models
+We proposed 'p' and 'q' parameters as 1 and 1-2-3, respectively for all products, since we observed similar ACF and PACF characteristics. Also, differencing of 1 will be tried for each model. The function for decomposing data and creating ARIMA models can be seen below: 
+
+```{r,echo=TRUE,eval=TRUE}
+
+ARIMA_proposing <- function(X){
+  df_new <- ts(X$sold_count,frequency=7)
+  df_additive <- decompose(df_new,type="additive")
+  df_deseasoned_detrended <- df_new-df_additive$seasonal-df_additive$trend
+  
+  model <- arima(df_deseasoned_detrended, order=c(1,0,1))
+  print(model)
+  AIC(model)
+  
+  model <- arima(df_deseasoned_detrended, order=c(1,1,1))
+  print(model)
+  AIC(model)
+  
+  model <- arima(df_deseasoned_detrended, order=c(1,0,2))
+  print(model)
+  AIC(model)
+  
+  model <- arima(df_deseasoned_detrended, order=c(1,1,2))
+  print(model)
+  AIC(model)
+  
+  model <- arima(df_deseasoned_detrended, order=c(1,0,3))
+  print(model)
+  AIC(model)
+  
+  model <- arima(df_deseasoned_detrended, order=c(1,1,3))
+  print(model)
+  AIC(model)
+}
+```
+
+
+Best ARIMA model for 'Mont Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMA_proposing(mont)
+```
+Best AIC is observed in the ARIMA model (1, 0, 2)
+
+Best ARIMA model for 'Bikini_1 Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMA_proposing(bikini_1)
+```
+Best AIC is observed in the ARIMA model (1, 0, 3)
+
+Best ARIMA model for 'Bikini_2 Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMA_proposing(bikini_2)
+```
+Best AIC is observed in the ARIMA model (1, 0, 3)
+
+Best ARIMA model for 'Tayt Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMA_proposing(tayt)
+```
+Best AIC is observed in the ARIMA model (1, 0, 3)
+
+Best ARIMA model for 'Kulaklık Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMA_proposing(kulaklık)
+```
+Best AIC is observed in the ARIMA model (1, 0, 3)
+
+Best ARIMA model for 'Süpürge Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMA_proposing(supurge)
+```
+Best AIC is observed in the ARIMA model (1, 0, 2)
+
+Best ARIMA model for 'Yüz Temizleyicisi Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMA_proposing(yuz_temizleyicisi)
+```
+Best AIC is observed in the ARIMA model (1, 0, 3)
+
+Best ARIMA model for 'Mendil Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMA_proposing(mendil)
+```
+Best AIC is observed in the ARIMA model (1, 0, 3)
+
+Best ARIMA model for 'Diş Fırçası Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMA_proposing(dis_fircasi)
+```
+Best AIC is observed in the ARIMA model (1, 0, 3)
+
+The ARIMA models with (1,0,3) parameters are the best performers in the most of the Trendyol products in terms of AIC.
+
+## Possible Regressors for Improving the Model 
+For deciding the possible regressors for each product, correlation matrix will be built and most positive and negative correlated variables will be selceted for the ARIMA models with external regressors.
+
+```{r,echo=TRUE,eval=TRUE}
+ggcorrplot(cor(mont[,3:12]) )
+```
+For 'Mont product', 'price' and 'basket_count' variables are the most correlated variables for the sold_count.
+
+```{r,echo=TRUE,eval=TRUE}
+ggcorrplot(cor(bikini_1[,3:12]) )
+```
+For 'Bikini_1 product', 'basket_count' and 'category_sold' variables are the most correlated variables for the sold_count.
+
+```{r,echo=TRUE,eval=TRUE}
+ggcorrplot(cor(bikini_2[,3:12]) )
+```
+For 'Bikini_2 product', 'visit_count' and 'basket_count' variables are the most correlated variables for the sold_count.
+
+```{r,echo=TRUE,eval=TRUE}
+ggcorrplot(cor(tayt[,3:12]) )
+```
+
+For 'Tayt product', 'price' and 'favored_count' variables are the most correlated variables for the sold_count.
+
+```{r,echo=TRUE,eval=TRUE}
+ggcorrplot(cor(kulaklık[,3:12]) )
+```
+
+For 'Kulaklık product', 'price' and 'basket_count' variables are the most correlated variables for the sold_count.
+
+```{r,echo=TRUE,eval=TRUE}
+ggcorrplot(cor(supurge[,3:12]) )
+```
+
+For 'Süpürge product', 'price' and 'visit_count' variables are the most correlated variables for the sold_count.
+
+```{r,echo=TRUE,eval=TRUE}
+ggcorrplot(cor(yuz_temizleyicisi[,3:12]) )
+```
+For 'Yüz Temizleyicisi product', 'price' and 'basket_count' variables are the most correlated variables for the sold_count.
+
+```{r,echo=TRUE,eval=TRUE}
+ggcorrplot(cor(mendil[,3:12]) )
+```
+
+For 'Mendil product', 'price' and 'visit_count' variables are the most correlated variables for the sold_count.
+
+```{r,echo=TRUE,eval=TRUE}
+ggcorrplot(cor(dis_fircasi[,3:12]) )
+```
+
+For 'Diş Fırçası product', 'price' and 'visit_count' variables are the most correlated variables for the sold_count.
+
+To conclude this section, the price is negatively correlated for almost al products, i.e the price increase results in less products sales. Furthermore, basket and visit_count are positive correlated with total unit sold of the products. 
+
+## Using the potential regressors in the selected ARIMA models
+
+In this section, the best ARIMA model in terms of AIC will be compared with ARIMAX models. ARIMAX models will be built with most 2 positively or negatively correlated external regressors for each product. Functin for comparing the two models is below: 
+
+```{r,echo=TRUE,eval=TRUE}
+ARIMAX_function <- function(X, regressor_1,regressor_2,p,d,q){
+  X <- X %>% map_df(rev)
+  df_train <- X[!(X$event_date >= "2021-05-25"),]
+  df_test <- X[!(X$event_date < "2021-05-25"),]
+  df_new <- ts(df_train$sold_count,frequency=7)
+  df_additive <- decompose(df_new,type="additive")
+  df_deseasoned_detrended <- df_new-df_additive$seasonal-df_additive$trend
+  df_deseasoned_detrended[1:3] <- mean(df_deseasoned_detrended[4:6])
+  df_deseasoned_detrended[113:115] <- mean(df_deseasoned_detrended[110:112])
+  forecasted_seasonal = (df_additive$seasonal)[108:114]
+  forecasted_trend = rep(mean(tail(df_additive$trend[!is.na(df_additive$trend)],2)),7)
+  
+  pf_reg1<-forecast(regressor_1,h=7)$mean[1]
+  pf_reg2<-forecast(regressor_2,h=7)$mean[1]
+  newxreg <- as.matrix(cbind(pf_reg1, pf_reg2))
+  matrix = cbind(regressor_1[1:115],regressor_2[1:115])
+  
+  old_model=arima(df_deseasoned_detrended,order=c(p,d,q))
+  model_forecast_old <- predict(old_model, n.ahead = 7)$pred
+  #print(model_forecast_old)
+  print(AIC(old_model))
+  
+  fitted_arimax=auto.arima(df_deseasoned_detrended,xreg=matrix)
+  model_forecast_new <- forecast(fitted_arimax,xreg=newxreg)$mean[1]
+  model_forecast_new<- rep(model_forecast_new,7)
+  #print(model_forecast_new)
+  print(AIC(fitted_arimax))
+  
+  
+  
+  new_restored <- forecasted_seasonal+forecasted_trend+model_forecast_new
+  old_restored <- forecasted_seasonal+forecasted_trend+model_forecast_old
+  
+
+    
+  error_new=X$sold_count[116:122]-new_restored
+  error_old=X$sold_count[116:122]-old_restored
+
+  mean=mean(X$sold_count)
+  MAD_2=sum(abs(error_old))/length(X$sold_count)
+  WMAPE_old=MAD_2/mean
+  print(WMAPE_old)
+  
+  mean=mean(X$sold_count)
+  MAD_1=sum(abs(error_new))/length(X$sold_count)
+  WMAPE_new=MAD_1/mean
+  print(WMAPE_new)
+}
+
+```
+
+For the 'Mont Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMAX_function(mont,mont$price,mont$basket_count,1,0,2)
+
+```
+
+Here we see that arima model has 149 AIC and arimax model has 143 AIC. New model is slightly better. In terms of prediction , the new model suffers much more than old model. we see that old model's wmape is around 18 pct and new model's wmape is around 23 pct. This may be occured from pointforecasting the regressor values since it accumulates the error.
+
+
+For the 'Bikini_1 Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMAX_function(bikini_1,bikini_1$basket_count,bikini_1$category_sold,1,0,3)
+
+```
+
+Here we see that arima model has 951 AIC and arimax model has 944 AIC. New model is slightly better. In terms of prediction , the new model suffers much more than old model. we see that old model's wmape is around 8 pct and new model's wmape is around 9 pct. This may be occured from pointforecasting the regressor values since it accumulates the error same as in previous one.
+
+
+For the 'Bikini_2 Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMAX_function(bikini_2,bikini_2$visit_count,bikini_2$basket_count,1,0,3)
+
+```
+
+Here we see that arima model has 797 AIC and arimax model has 845 AIC. New model is slightly worse. In terms of prediction , the new model suffers more than old model. we see that old model's wmape is around 1.7 pct and new model's wmape is around 1.8 pct. This may be occured from pointforecasting the regressor values since it accumulates the error.
+
+
+For the 'Tayt Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMAX_function(tayt,tayt$price,tayt$favored_count,1,0,3)
+
+```
+
+Here we see that arima model has 1613 AIC and arimax model has 1639 AIC. New model is slightly worse. In terms of prediction , the new model predicts much better than old model. we see that old model's wmape is around 1.9 pct and new model's wmape is around 1.4 pct.
+
+
+For the 'Kulaklık Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMAX_function(kulaklık,kulaklık$price,kulaklık$basket_count,1,0,3)
+
+```
+
+Here we see that arima model has 1370 AIC and arimax model has 1390 AIC. New model is slightly worse. In terms of prediction , the new model predicts much better than old model. we see that old model's wmape is around 2.5 pct and new model's wmape is around 1.1 pct.
+
+For the 'Süpürge Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMAX_function(supurge,supurge$price,supurge$visit_count,1,0,2)
+
+```
+
+Here we see that arima model has 753 AIC and arimax model has 769 AIC. New model is slightly worse. In terms of prediction , the new model predicts slightly better than old model. we see that old model's wmape is around 1.1 pct and new model's wmape is around 1.1 pct.
+
+For the 'Yüz Temizleyicisi Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMAX_function(yuz_temizleyicisi,yuz_temizleyicisi$price,yuz_temizleyicisi$basket_count,1,0,3)
+
+```
+
+Here we see that arima model has 1038 AIC and arimax model has 1066 AIC. New model is slightly worse. In terms of prediction , the new model predicts much better than old model. we see that old model's wmape is around 1.4 pct and new model's wmape is around 1.2 pct.
+
+
+For the 'Mendil Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMAX_function(mendil,mendil$price,mendil$visit_count,1,0,3)
+
+```
+
+Here we see that arima model has 1464 AIC and arimax model has 1479 AIC. New model is slightly worse. In terms of prediction , the new model predicts much better than old model. we see that old model's wmape is around 3.4 pct and new model's wmape is around 3.1 pct.
+
+For the 'Diş Fırçası Product':
+```{r,echo=TRUE,eval=TRUE}
+ARIMAX_function(dis_fircasi,dis_fircasi$price,dis_fircasi$visit_count,1,1,2)
+
+```
+
+Here we see that arima model has 1172 AIC and arimax model has 1175 AIC. New model is slightly worse. In terms of prediction , the new model predicts better than old model. we see that old model's wmape is around 1.7 pct and new model's wmape is around 1.5 pct.
+
+
+## 6. Conclusion
+
+In conclusion, we see that when the model is improved then we see that the prediction gets worse but when the model gets worse the prediction gives us better results. This may be occured from not selecting the correct regressors or accumulated error in the point forecasting.Overall, we investigated the sales quantity data from Trendyol and applied some statistical analysis and furthermore we predicted last 7 days' sales quantity and compared them on the test data.ARIMAX is better than ARIMA in general in terms of performance, but in our case , this was not entirely true. One more reason could be having some data points which equals to zero sales quantity, this may gave us some non-ideal results.All in all, other than mentioned reasons we can say that arimax performed better.

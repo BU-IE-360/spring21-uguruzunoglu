@@ -1,0 +1,397 @@
+---
+title: "IE 360 Final Exam - Predicting the hourly electricity price of Turkey"
+author: "Ugur Uzunoglu - IE360 - Spring 2021"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The aim of this study is to predict tomorrow's hourly electricity price data (market clearing prices (MCP) per each hour) with using predictive AR and MA models and regression models . The data is acquired from EPİAŞ, from 1st of June, 2015 till the 21th of June, 2021. The last 30 days will be used for testing the models.
+
+### Data Reading & Preprocessing
+Importing necessary libraries
+```{r,warning=FALSE, message=FALSE}
+library("readxl")
+library("ggplot2")
+library("tidyverse")
+library("zoo")
+library(plotly)
+library("data.table")
+library(forecast)
+library(ggcorrplot)
+library(stats)
+library(urca)
+library(lubridate)
+
+```
+Target variable and training variables is gathered as an csv file from the EPİAŞ: 
+```{r,echo=TRUE,eval=TRUE}
+df <- fread("mcp_with_variables.csv")
+
+str(df)
+drop_na(df)
+#converting to data table
+setDT(df)
+
+#combining Date and Hour column
+#df$NewDate <-ymd(df$date)+as.xts(df$hour)
+
+df$year<-format(df$date, "%y")
+df$day<-format(df$date,"%m/%d")
+df$month<-format(df$date, "%m")
+
+df[,NewDate:=ymd(date)+dhours(hour)]
+
+```
+There are no missing values.
+
+### 1. Choose the currency for MCP 
+Visualizing a sample of currency data (TL, EUR, USD) and obtaining the correlation matrix:
+
+```{r,echo=TRUE,eval=TRUE}
+ts.plot(df$mcp_try[50000:52000])
+ts.plot(df$mcp_dollars[50000:52000])
+ts.plot(df$mcp_euro[50000:52000])
+
+cor(df[,3:5])
+```
+Time series sample visualization is showing that MCP is having similar seasonality and trend in all three currencies. However, TL price is not significantly correlated with (approx 0.50) EUR and USD (EUR and USD is %99 correlated). This can indicate that market prices are regulated by EPİAŞ, the government, etc, and not increased or decreased with sudden TRY/USD exchange rates. Therefore, TL MCP will be utilized further in this study. 
+
+### 2. Ploting the time series of MCP
+
+```{r,echo=TRUE,eval=TRUE}
+
+p <- ggplot(data = df, aes(x = NewDate, y = mcp_try ,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Hourly Electricity Price in Turkey between 2015-2021 (TRY)', x= "Date", y = "Hourly Electricity Price(TRY)") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+#fig <- ggplotly(p)
+
+#fig <- fig %>% layout(dragmode = "pan")
+
+#fig
+p
+```
+It can be clearly seen that the mean and variance is increasing between 2015-2020. Therefore the data is not stationary. It has a positive trend.  To conclude whether the data is stationary or not, KPSS Unit Root Test is used:
+
+
+```{r,echo=TRUE,eval=TRUE}
+KPSS_test= ur.kpss(df$mcp_try)
+summary(KPSS_test)
+plot(KPSS_test)
+```
+The null hypothesis is the data is stationary, and the value of test-statistic exceeds critical values significantly. Therefore, the null hypothesis is rejected and can be concluded that the data is non-stationary.
+
+### 2. Plotting the autocorrelation function of the MCP
+
+```{r,echo=TRUE,eval=TRUE}
+acf(df$mcp_try)
+```
+The lags are is exponentially decreasing and increasing in 24 lags of period. The decrease and increase indicate that trend exist in the data. The peaks are observed at lag 0,24 and 48, indicating that the data has daily seasonality(24 hours of period). 
+
+## METHOD A: FORECASTING WITH TIME SERIES ANALYSIS
+
+### 1. Time series decomposition
+The visualization of monthly sample the time series data from June 1 2015 to June 30 2015:
+```{r,echo=TRUE,eval=TRUE}
+ts.plot(df$mcp_try[1:720])
+```
+For the preliminary analysis, it can be seen that the data has a weekly and daily seasonality(daily seasonality is already found). For further understanding, decompositions at different levels(hourly, daily, weekly, monthly) are required.
+
+
+### Hourly Decomposition
+
+```{r,echo=TRUE,eval=TRUE}
+df_new <- ts(df$mcp_try,frequency=24)
+ts.plot(df$mcp_try[0:72])
+df_additive <- decompose(df_new,type="additive")
+plot(df_additive)
+```
+From the figure, seasonality is not clearly observable, but from the 3 days figure above, we know that prices are lower between 03.00-09.00 everyday , meaning that hourly seasonality exists.
+
+### Daily Decomposition
+To analyze daily trends and seasonality, the hourly data is grouped into daily data by averaging 24 hours' period. 
+```{r,echo=TRUE,eval=TRUE}
+
+daily_df <- df %>% group_by(year,day) %>% summarize(DailyAvg = mean(`mcp_try`))
+df_new <- ts(daily_df$DailyAvg,frequency=7)
+
+df_additive <- decompose(df_new,type="additive")
+plot(df_additive)
+```
+The trend and seasonality is clearly observable from the above figure. Random component is similar to white noise, but large deviations can be observed in the special days, i.e. national holidays. 
+
+### Monhly Decomposition
+To analyze daily trends and seasonality, the daily data is grouped into monthly data by averaging daily period. 
+
+```{r,echo=TRUE,eval=TRUE}
+
+monthly_df <- df %>% group_by(year,month,day) %>% summarize(DailyAvg = mean(`mcp_try`))
+monthly_df <- monthly_df %>% group_by(year,month) %>% summarize(Monthly = mean(DailyAvg))
+
+df_new <- ts(monthly_df$Monthly,frequency=12)
+
+df_additive <- decompose(df_new,type="additive")
+plot(df_additive)
+```
+For the monthly data, the seasonality and the trend line are very clearly observable. 
+
+Since the hourly and daily seasonality exist, there is a pattern at every 168 hours(7 days). The AR and MA models will be built upon this pattern.
+
+## 2. Neighborhood search of the initial model (i.e. ARIMA/SARIMA).
+After we found out that there is a pattern at every 168 hours(7 days), the decomposition of the time-series data:
+
+```{r,echo=TRUE,eval=TRUE}
+df_new <- ts(df$mcp_try,frequency=168)
+
+df_additive <- decompose(df_new,type="additive")
+plot(df_additive)
+ts.plot(df$mcp_try[1:144])
+```
+For 7 days' period from monday to sunday(1 June-7 June 2015), the electricity prices is has similar pattern not only in weekdays, but also the weekends.From the decomposition data, trend and seasonality exists in the data, and should be eliminated for the predictive models. The noise is also similar to white noise, with large deviatations occuring in special days.
+
+## 3. Deseasonalizing and Detrendng the Time-series and Applying AR Models
+For deseasonalizing and detrendng the Time-series, the trend and seasonal components should be extracted from the consumption data:
+```{r,echo=TRUE,eval=TRUE}
+df_deseasoned_detrended <- df_new-df_additive$seasonal-df_additive$trend
+
+p <- ggplot(data = df_deseasoned_detrended, aes(x = df$NewDate, y = df_deseasoned_detrended,group=1))+
+  geom_line(color = '#007cc3') + labs(title = 'Deaseasoned and Detrended Data', x= "Date", y = "Hourly Electricity Price(TRY)") + theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+p
+
+```
+
+The data is now more stationary and has no increasing or decreasing trend.  To determine appropriate AR,MA, and ARMA models, KPSS Unit Root Test can be applied for checking the stationarity of the data for the differencing (d) parameter. Also, ACF and PACF plots should be investigated for p and q parameters:
+
+```{r,echo=TRUE,eval=TRUE}
+KPSS_test= ur.kpss(df_deseasoned_detrended)
+summary(KPSS_test)
+```
+The null hypothesis is not rejected this time, since value of test-statistic is lower than the critical values. Therefore I can conclude that the data is now stationary.
+
+```{r,echo=TRUE,eval=TRUE}
+acf(df_deseasoned_detrended,na.action=na.pass)
+pacf(df_deseasoned_detrended,na.action=na.pass)
+```
+From the ACF figure, the q parameter should be between 1-7, also 24(not included because of computational comlexity).  From the PACF figure, the p parameter should either be between 1-3. For the training, the test set(last 30 days) should be excluded from the dataset. Starting a neighborhood search with AR models:
+
+Train-test set split:
+```{r,echo=TRUE,eval=TRUE}
+df_train <- df_deseasoned_detrended[1:(length(df_deseasoned_detrended)-30*24)]
+df_test <- df_deseasoned_detrended[(length(df_deseasoned_detrended)-30*24+1):length(df_deseasoned_detrended)]
+```
+
+AR Models:
+```{r,echo=TRUE,eval=TRUE}
+model <- arima(df_train, order=c(1,0,0))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(2,0,0))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(3,0,0))
+print(model)
+AIC(model)
+
+```
+The lowest AIC is achieved by p=3 and will be used in the ARMA model. 
+
+## 4. Applying MA Models
+As mentioned before, from the PACF figure, the q parameter should either be 1-7  for the MA models. For computational complexity, q values will be between 1-5
+
+```{r,echo=TRUE,eval=TRUE}
+model <- arima(df_train, order=c(0,0,1))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(0,0,2))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(0,0,3))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(0,0,4))
+print(model)
+AIC(model)
+
+model <- arima(df_train, order=c(0,0,5))
+print(model)
+AIC(model)
+
+
+```
+
+q=5 gives the best AIC(lowest). Increasing q further can be even better, but due to computational complexity, q=5 will be further utilized. 
+
+## 3. Comparison of AR and MA Models and Training and Prediction of ARMA Models
+
+Starting with best models(models with lowest AIC):
+
+```{r,echo=TRUE,eval=TRUE}
+model <- arima(df_train, order=c(3,0,5))
+print(model)
+AIC(model)
+BIC(model)
+```
+
+The AIC value is  better(lower) from the above models. Checking the residuals:
+
+```{r,echo=TRUE,eval=TRUE}
+checkresiduals(model)
+
+```
+The autocorrelation can be still observed, most at lag 24(yesterday's same hour data); however, the residuals are normally distributed. Visual comparison of the prediction and test set would be a good idea. For the seasonality, I took the first 14*24 period, since it has a replying pattern for each of the 336 data points. Also for trend component, I took the last 14*24 trend values, since the last 
+
+```{r,echo=TRUE,eval=TRUE}
+model_forecast <- predict(model, n.ahead = 30*24)$pred
+last_trend_value <-tail(df_additive$trend[!is.na(df_additive$trend)],30*24)
+
+seasonality <- df_additive$seasonal[1:(30*24)]
+forecast_combined <-model_forecast+last_trend_value+seasonality
+df$forecast <- 0
+df$forecast[(length(df_deseasoned_detrended)-30*24+1):length(df_deseasoned_detrended)] <-forecast_combined
+
+
+p <- ggplot()+
+  geom_line(data = df[52000:53112],aes(x = NewDate,y=mcp_try,color='Actual Data') ) +
+  geom_line(data = df[(53112-30*14+1):53112],aes(x = NewDate,y=forecast,color='Prediction')) +
+                     scale_color_manual(values = c(
+    'Actual Data' = '#007cc3',
+    'Prediction' = 'red')) +   labs(title = 'Hourly Electricity Price(TL/MWh) Prediction', x= "Date", y = "Hourly Electricity Price(TL/MWh)",color = 'Legend')
+
+ theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+
+p
+
+
+```
+The model can predict daily and hourly seasonality, but can not predict the deviation from the mean after the 10 days, i.e the model is more accurate for predicting the first 10 days, but then the hourly deviations can not be predicted by the model. To evaulate the model and to measure overall accuracy of the model daily mean absolute percentage error for each date and weighted mean absolute percentage error (WMAPE) are calculated: 
+
+```{r,echo=TRUE,eval=TRUE}
+
+metrics <- df[(53112-30*24+1):53112] %>% group_by(year,day) %>% summarize(MAPE = mean(abs((mcp_try-forecast)/mcp_try)) * 100)
+
+metrics
+```
+On the contrary of visual inspection of the real data and prediction, MAPE is stable in 30 days, with high MAPE's are observed in 7 days/30 days. To further improve the model, the high deviations can be analyzed. However, for the sake of the study, forecasting with regression will be done. WMAPE of the model: 
+
+```{r,echo=TRUE,eval=TRUE}
+
+wmape <- abs(sum((df[(53112-30*24+1):53112]$mcp_try-df[(53112-24*30+1):53112]$forecast)*metrics$MAPE*100))/sum(df[(53112-24*30+1):53112]$mcp_try)
+wmape
+```
+WMAPE is approximately 6%. 
+
+
+## METHOD B: FORECASTING WITH REGRESSION
+Regression analysis would give a better model, since we have more than 10 variables related to MCP data. After splitting into test and train set, fitting the data with trend line, year and month variables and variables in the data(excluding EUR and USD prices): 
+```{r,echo=TRUE,eval=TRUE}
+#trend:
+df_train <- df[1:(53112-30*24),]
+df_test <- df[(53112-30*24+1):53112,]
+df_train[,trend:=1:.N]
+
+fit <- lm(mcp_try ~hour+month+load_plan+total_prod+natural_gas+wind+lignite+black_coal+import_coal+fuel_oil+geothermal+dam+naphta+biomass+river+other+year ,data=df_train)
+summary(fit)
+#checkresiduals(fit)
+
+```
+Adjusted R-squared (0.69) gives a initial good-start,parameters with high p values will be discarded on the next model. Residuals are not checked for now, due to computational complexity freezes my computer:
+
+```{r,echo=TRUE,eval=TRUE}
+
+
+fit <- lm(mcp_try ~hour+load_plan+year+month ,data=df_train)
+summary(fit)
+#checkresiduals(fit)
+
+```
+Now all values except hour are significant. We intuitively know that hour is an important variable, so I decided to leave in the model for know. Introducting a ratio type variable, renewable energy generation/total_production: 
+
+```{r,echo=TRUE,eval=TRUE}
+df$ratio <- (df$wind+df$lignite + df$geothermal + df$biomass)/df$total_prod
+df[,trend:=1:.N]
+
+df_train <- df[1:(53112-30*24),]
+df_test <- df[(53112-30*24+1):53112,]
+
+fit <- lm(mcp_try ~hour+load_plan+year+month+ratio ,data=df_train)
+summary(fit)
+checkresiduals(fit)
+
+```
+All variables are significant for the model and the ratio of renewable prod./total prod. is also improved the R-squared values. Looking the resudials, they are evenly distributed and have zero mean. However, from the ACF, lagged variables should be introduced to increase the accuracy of the model. We already know that there is hourly, daily and weekly seasonality. Let's try them for our predictive models: 
+
+```{r,echo=TRUE,eval=TRUE}
+df$target_lagged_1 <-shift(df$mcp_try, 1)
+df$target_lagged_24 <-shift(df$mcp_try, 24)
+df$target_lagged_168 <-shift(df$mcp_try, 168)
+df$ratio <- (df$wind+df$lignite + df$geothermal + df$biomass)/df$total_prod
+df[,trend:=1:.N]
+
+df_train <- df[1:(53112-30*24),]
+df_test <- df[(53112-30*24+1):53112,]
+
+fit <- lm(mcp_try ~hour+load_plan+year+month+ratio+target_lagged_1+target_lagged_24+target_lagged_168 ,data=df_train)
+summary(fit)
+checkresiduals(fit)
+
+```
+The lagged variables increased the R-squared values by approximately 0.2, and all variables are significant except some of the months. With achieving 0.88 adjusted R-squares, lets visualize the forecast and compare the model with ARMA model.
+
+
+
+
+
+```{r,echo=TRUE,eval=TRUE}
+
+pred <- predict(fit, df_test)
+
+model_forecast <- pred
+
+df$forecast <- 0
+df$forecast[(53112-30*24+1):53112] <-model_forecast
+
+
+p <- ggplot()+
+  geom_line(data = df[52000:53112],aes(x = NewDate,y=mcp_try,color='Actual Data') ) +
+  geom_line(data = df[(53112-30*14+1):53112],aes(x = NewDate,y=forecast,color='Prediction')) +
+                     scale_color_manual(values = c(
+    'Actual Data' = '#007cc3',
+    'Prediction' = 'red')) +   labs(title = 'Hourly Electricity Price(TL/MWh) Prediction', x= "Date", y = "Hourly Electricity Price(TL/MWh)",color = 'Legend')
+
+ theme(text=element_text(color="#004785"),axis.text=element_text(color="#004785"))
+
+p
+
+
+
+```
+From the visualization, the model does a pretty good job for predicting the 30 days of electricity price. To understand better, MAPE and WMAPE values should be checked: 
+
+```{r,echo=TRUE,eval=TRUE}
+
+metrics <- df[(53112-30*24+1):53112] %>% group_by(year,day) %>% summarize(MAPE = mean(abs((mcp_try-pred)/mcp_try)) * 100)
+
+metrics
+```
+
+```{r,echo=TRUE,eval=TRUE}
+
+wmape <- abs(sum((df[(53112-30*24+1):53112]$mcp_try-df[(53112-24*30+1):53112]$forecast)*metrics$MAPE*100))/sum(df[(53112-24*30+1):53112]$mcp_try)
+wmape
+```
+WMAPE is approximately 6%. It is a little bit worse than the best ARMA model (approx. WMAPE 5.98)
+High MAPE values are observed in the same days for both models. 
+
+## 6. Conclusion
+
+In conclusion, The hourly electricity price data can be predicted accurately both with ARMA models and regression models. However, I would expect regression model can do better, since we introduced production, renewable energy production data, etc. into the model. For future work, a more detailed regression analysis should be done, and more variables can be further leveraged with feature engineering. Also, adding variables one by one to the regression model would be better for the analysis, I added all of the variables at the first model, due to time restrictions. 
